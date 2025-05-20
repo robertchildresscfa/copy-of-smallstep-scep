@@ -16,8 +16,8 @@ import (
 
 	"github.com/smallstep/pkcs7"
 
-	"github.com/smallstep/scep/cryptoutil"
-	"github.com/smallstep/scep/x509util"
+	"github.com/robertchildresscfa/copy-of-smallstep-scep/cryptoutil"
+	"github.com/robertchildresscfa/copy-of-smallstep-scep/x509util"
 )
 
 // errors
