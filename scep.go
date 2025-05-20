@@ -566,6 +566,98 @@ func CACerts(data []byte) ([]*x509.Certificate, error) {
 	return p7.Certificates, nil
 }
 
+// NewCSRRequestSpecial creates a scep PKI PKCSReq/UpdateReq message
+func NewCSRRequestSpecial(csr *x509.CertificateRequest, tmpl *PKIMessage, opts ...Option) (*PKIMessage, error) {
+	conf := &config{logger: newNopLogger(), certsSelector: NopCertsSelector()}
+	for _, opt := range opts {
+		opt(conf)
+	}
+
+	derBytes := csr.Raw
+	recipients := conf.certsSelector.SelectCerts(tmpl.Recipients)
+	if len(recipients) < 1 {
+		if len(tmpl.Recipients) >= 1 {
+			// our certsSelector eliminated any CA/RA recipients
+			return nil, errors.New("scep: no selected CA/RA recipients")
+		}
+		return nil, errors.New("scep: no CA/RA recipients")
+	}
+
+	// changing encryption algorithm
+	pkcs7.ContentEncryptionAlgorithm = pkcs7.EncryptionAlgorithmAES256CBC
+
+	e7, err := pkcs7.Encrypt(derBytes, recipients)
+	if err != nil {
+		return nil, err
+	}
+
+	signedData, err := pkcs7.NewSignedData(e7)
+	if err != nil {
+		return nil, err
+	}
+
+	// create transaction ID from public key hash
+	tID, err := newTransactionID(csr.PublicKey)
+	if err != nil {
+		return nil, err
+	}
+
+	sn, err := newNonce()
+	if err != nil {
+		return nil, err
+	}
+
+	conf.logger.Log(
+		"msg", "creating SCEP CSR request",
+		"transaction_id", tID,
+		"signer_cn", tmpl.SignerCert.Subject.CommonName,
+	)
+
+	// PKIMessageAttributes to be signed
+	config := pkcs7.SignerInfoConfig{
+		ExtraSignedAttributes: []pkcs7.Attribute{
+			{
+				Type:  oidSCEPtransactionID,
+				Value: tID,
+			},
+			{
+				Type:  oidSCEPmessageType,
+				Value: tmpl.MessageType,
+			},
+			{
+				Type:  oidSCEPsenderNonce,
+				Value: sn,
+			},
+		},
+	}
+
+	// sign attributes
+	if err := signedData.AddSigner(tmpl.SignerCert, tmpl.SignerKey, config); err != nil {
+		return nil, err
+	}
+
+	rawPKIMessage, err := signedData.Finish()
+	if err != nil {
+		return nil, err
+	}
+
+	cr := &CSRReqMessage{
+		CSR: csr,
+	}
+
+	newMsg := &PKIMessage{
+		Raw:           rawPKIMessage,
+		MessageType:   tmpl.MessageType,
+		TransactionID: tID,
+		SenderNonce:   sn,
+		CSRReqMessage: cr,
+		Recipients:    recipients,
+		logger:        conf.logger,
+	}
+
+	return newMsg, nil
+}
+
 // NewCSRRequest creates a scep PKI PKCSReq/UpdateReq message
 func NewCSRRequest(csr *x509.CertificateRequest, tmpl *PKIMessage, opts ...Option) (*PKIMessage, error) {
 	conf := &config{logger: newNopLogger(), certsSelector: NopCertsSelector()}
